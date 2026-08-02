@@ -14,6 +14,40 @@ Drive / OneDrive / iCloud and reach the exact same dataset from any browser
 running its own local copy of this server pointed at the same file. See
 [Data storage & multi-device setup](#data-storage--multi-device-setup) below.
 
+## Quick Start
+
+**Prerequisite (one-time, per device)**: Python 3 must already be installed.
+If you're not sure, get it from
+[python.org/downloads](https://www.python.org/downloads/) — on the Windows
+installer, check "Add python.exe to PATH" before clicking Install. These
+launcher scripts don't install Python itself, only NutriTool's one small
+dependency (Flask).
+
+Then double-click the script for your OS:
+
+| OS | Script |
+|---|---|
+| Windows | [`run.bat`](run.bat) |
+| macOS | [`run.command`](run.command) |
+| Linux | [`run.sh`](run.sh) — run `chmod +x run.sh` once first, then double-click or run `./run.sh` |
+
+Each script: checks whether Flask is already installed and only runs `pip
+install` if it's actually missing (so a normal launch never silently needs
+the internet), starts the server, waits until it's actually responding, then
+opens your default browser to it automatically. On any failure — Python not
+found, the install failing, or the port already being in use — it prints a
+plain-English explanation and what to try next, not a raw stack trace.
+
+**macOS note**: the first time you double-click `run.command`, Gatekeeper
+will likely refuse to open it ("cannot be opened because it is from an
+unidentified developer" or similar) since it's an unsigned script. That's
+expected, not a bug — right-click (or Control-click) the file, choose
+**Open**, and confirm in the dialog that appears. After that first time,
+double-clicking works normally.
+
+If a script doesn't work on your particular setup, the manual steps below
+always work as a fallback, as long as Python is installed.
+
 ## Running it
 
 ```bash
@@ -210,6 +244,9 @@ recompute automatically) or delete it. Entries show their logged timestamp.
 - `app.py` — Flask server: serves the frontend and the `/api/data` REST API,
   handles `config.json` / data-file resolution and JSON read/write
 - `requirements.txt` — just `Flask`
+- `run.bat` / `run.command` / `run.sh` — one-click/double-click launchers per
+  OS (see Quick Start); install Flask only if it's missing, start the
+  server, and open your browser once it's actually ready
 - `static/index.html` — the entire frontend (nutrient panel, decay model,
   seed food database, UI) — unchanged from the original except its
   persistence layer now calls `/api/data` instead of `localStorage`
