@@ -4,9 +4,9 @@
 <meta charset="UTF-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1.0" />
 <title>NutriTool — Personal Nutrient Tracker</title>
-<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
-<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
-<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="vendor/react.production.min.js"></script>
+<script src="vendor/react-dom.production.min.js"></script>
+<script src="vendor/babel.min.js"></script>
 <style>
   :root {
     --bg: #f5f6f8;
@@ -107,6 +107,10 @@
   }
   .footer-note { font-size: 11px; color: var(--text-dim); margin-top: 24px; line-height: 1.6; }
   .empty-state { color: var(--text-dim); font-size: 12.5px; padding: 20px; text-align: center; }
+  .error-state {
+    background: #fef2f2; border: 1px solid #fecaca; border-radius: 6px; padding: 14px;
+    color: #7f1d1d; font-size: 12.5px; line-height: 1.6;
+  }
   details summary { cursor: pointer; font-size: 12px; color: var(--accent); margin: 4px 0; }
 </style>
 </head>
@@ -114,14 +118,15 @@
 <div id="root"></div>
 
 <script type="text/babel" data-presets="react">
-const { useState, useEffect, useMemo, useCallback } = React;
+const { useState, useEffect, useMemo, useCallback, useRef } = React;
 
 /* ============================================================================
  * PERSONALIZATION CONFIG
  * ----------------------------------------------------------------------------
  * Edit these defaults before first run, or use the in-app Settings tab
- * (which reads/writes this same shape to localStorage — whichever you edit
- * last "wins" once you've opened the app once and saved via the UI).
+ * (which reads/writes this same shape via the local /api/data endpoint —
+ * whichever you edit last "wins" once you've opened the app once and saved
+ * via the UI).
  *
  *   age            years
  *   sex            'male' | 'female'  (used because several RDAs, e.g. iron,
@@ -362,11 +367,11 @@ function computeTargets(cfg) {
  * ----------------------------------------------------------------------------
  * Approximate figures in the style of USDA FoodData Central (FDC), entered
  * from general nutrition-science knowledge rather than a live FDC API fetch
- * (this tool makes no runtime network calls, per its no-backend design).
- * Treat these as reasonable estimates for personal tracking, NOT lab-grade
- * precision — spot-check anything nutrient-critical against FDC directly
- * (fdc.nal.usda.gov). Unlisted/uncertain nutrients are left as `null`
- * ("no data") rather than defaulted to 0 ("no content").
+ * (this tool makes no external network calls, per its no-internet-required
+ * design). Treat these as reasonable estimates for personal tracking, NOT
+ * lab-grade precision — spot-check anything nutrient-critical against FDC
+ * directly (fdc.nal.usda.gov). Unlisted/uncertain nutrients are left as
+ * `null` ("no data") rather than defaulted to 0 ("no content").
  * ========================================================================= */
 function mkFood(id, name, vals) {
   const nutrients = {};
@@ -478,18 +483,33 @@ const SEED_FOODS = [
 ];
 
 /* ============================================================================
- * localStorage PERSISTENCE
+ * LOCAL FILE-BACKED PERSISTENCE
+ * ----------------------------------------------------------------------------
+ * The frontend never touches localStorage or the filesystem directly — it
+ * talks to this same app's own Flask backend over plain HTTP on localhost
+ * (see app.py), which reads/writes a single JSON file on disk. That file can
+ * live in a folder synced by Dropbox/Google Drive/OneDrive/iCloud, so the
+ * same dataset is reachable from any browser on any device that runs its own
+ * local copy of this server pointed at the same file path (see config.json
+ * and README.md — "one server per device, same file, last write wins").
+ *
+ * No request here ever leaves localhost; this file makes no calls to any
+ * external host.
  * ========================================================================= */
-const LS_KEYS = { config: 'nutritool.config', customFoods: 'nutritool.customFoods', log: 'nutritool.log' };
-
-function loadLS(key, fallback) {
-  try {
-    const raw = localStorage.getItem(key);
-    return raw ? JSON.parse(raw) : fallback;
-  } catch (e) { return fallback; }
+async function fetchData() {
+  const res = await fetch('/api/data');
+  if (!res.ok) throw new Error('GET /api/data failed: ' + res.status);
+  return res.json();
 }
-function saveLS(key, value) {
-  try { localStorage.setItem(key, JSON.stringify(value)); } catch (e) { /* storage unavailable/full */ }
+
+async function saveData(partial) {
+  const res = await fetch('/api/data', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(partial),
+  });
+  if (!res.ok) throw new Error('POST /api/data failed: ' + res.status);
+  return res.json();
 }
 
 /* ============================================================================
@@ -824,14 +844,39 @@ function SettingsPanel({ config, onSave }) {
 
 function App() {
   const [tab, setTab] = useState('dashboard');
-  const [config, setConfig] = useState(() => loadLS(LS_KEYS.config, DEFAULT_CONFIG));
-  const [customFoods, setCustomFoods] = useState(() => loadLS(LS_KEYS.customFoods, []));
-  const [log, setLog] = useState(() => loadLS(LS_KEYS.log, []));
+  const [loaded, setLoaded] = useState(false);
+  const [loadError, setLoadError] = useState(null);
+  const [saveError, setSaveError] = useState(null);
+  const [config, setConfig] = useState(DEFAULT_CONFIG);
+  const [customFoods, setCustomFoods] = useState([]);
+  const [log, setLog] = useState([]);
   const [, forceTick] = useState(0);
+  const saveTimer = useRef(null);
 
-  useEffect(() => saveLS(LS_KEYS.config, config), [config]);
-  useEffect(() => saveLS(LS_KEYS.customFoods, customFoods), [customFoods]);
-  useEffect(() => saveLS(LS_KEYS.log, log), [log]);
+  // Initial load from the local backend (GET /api/data).
+  useEffect(() => {
+    fetchData()
+      .then(data => {
+        setConfig({ ...DEFAULT_CONFIG, ...(data.config || {}) });
+        setCustomFoods(data.customFoods || []);
+        setLog(data.log || []);
+        setLoaded(true);
+      })
+      .catch(err => setLoadError(String(err)));
+  }, []);
+
+  // Persist to the local backend (debounced POST /api/data) whenever
+  // config/customFoods/log change, once the initial load has completed.
+  useEffect(() => {
+    if (!loaded) return;
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    saveTimer.current = setTimeout(() => {
+      saveData({ config, customFoods, log })
+        .then(() => setSaveError(null))
+        .catch(err => setSaveError(String(err)));
+    }, 400);
+    return () => clearTimeout(saveTimer.current);
+  }, [config, customFoods, log, loaded]);
 
   // Re-render periodically so decay bars visibly drift even with no new actions.
   useEffect(() => {
@@ -873,13 +918,35 @@ function App() {
     setCustomFoods(prev => [...prev, newFood]);
   };
 
+  if (loadError) {
+    return (
+      <div className="error-state">
+        <strong>Couldn't reach the local NutriTool server.</strong>
+        <div style={{ marginTop: 6 }}>{loadError}</div>
+        <div style={{ marginTop: 6 }}>
+          Make sure <code>python app.py</code> is running, and that you opened this page from the
+          URL it printed (e.g. http://localhost:5000) rather than as a standalone file.
+        </div>
+      </div>
+    );
+  }
+  if (!loaded) {
+    return <div className="empty-state">Loading your data…</div>;
+  }
+
   return (
     <div>
       <h1>NutriTool</h1>
       <div className="subtitle">
-        Local, single-file nutrient intake tracker. No accounts, no server, no network calls at runtime —
-        everything lives in this browser's localStorage.
+        Local nutrient intake tracker, served by a local Flask app. No internet access is required to
+        run it — only localhost. Data is stored in a JSON file on disk (see config.json), so it can
+        live in a cloud-synced folder and be reached the same way from any browser on any device.
       </div>
+      {saveError && (
+        <div className="callout">
+          Last save to the local server failed: {saveError} — your latest change may not be persisted yet.
+        </div>
+      )}
       <div className="tabs">
         <button className={"tab" + (tab === 'dashboard' ? ' active' : '')} onClick={() => setTab('dashboard')}>Dashboard</button>
         <button className={"tab" + (tab === 'log' ? ' active' : '')} onClick={() => setTab('log')}>Log Food</button>
@@ -915,10 +982,11 @@ function App() {
 
       <div className="footer-note">
         Seed food data (~100 foods) is styled after USDA FoodData Central per-100g values, entered from
-        general nutrition knowledge rather than fetched live (this app makes no network calls). RDA/AI
-        targets are sourced from NIH Office of Dietary Supplements fact sheets summarizing the National
-        Academies' Dietary Reference Intakes. Treat all numbers here as personal-tracking estimates, not
-        medical advice — see README.md for full sourcing notes and the decay/lookback table.
+        general nutrition knowledge rather than fetched live. RDA/AI targets are sourced from NIH Office
+        of Dietary Supplements fact sheets summarizing the National Academies' Dietary Reference Intakes.
+        Treat all numbers here as personal-tracking estimates, not medical advice. This app makes no
+        external network calls — only local requests to its own server on localhost — see README.md for
+        the full sourcing notes, the decay/lookback table, and the multi-device data file setup.
       </div>
     </div>
   );

@@ -1,21 +1,74 @@
 # NutriTool
 
-A local, single-file nutrient intake tracker. Log foods, see running levels of
-29 nutrients against personalized targets, with old intake "decaying" over
-time and low-trending nutrients flagged. No accounts, no server, no sync, no
-network calls at runtime — everything lives in your browser's `localStorage`.
+A local nutrient intake tracker: a small Flask server on your machine that
+serves the frontend and stores your data in a JSON file on disk. Log foods,
+see running levels of 29 nutrients against personalized targets, with old
+intake "decaying" over time and low-trending nutrients flagged. No accounts,
+no cloud backend, no external network calls ever — the app never talks to
+anything but its own server on `localhost`.
+
+Because the data lives in a plain JSON file rather than browser
+`localStorage`, you can point it at a folder synced by Dropbox / Google
+Drive / OneDrive / iCloud and reach the exact same dataset from any browser
+(Chrome, Firefox, Safari, Edge) on any device — as long as that device is
+running its own local copy of this server pointed at the same file. See
+[Data storage & multi-device setup](#data-storage--multi-device-setup) below.
 
 ## Running it
 
-Just open [`index.html`](index.html) in a browser. That's it — no install, no
-build step. It loads React, ReactDOM, and Babel Standalone from a CDN
-(unpkg.com) to transform the in-browser JSX, so you do need an internet
-connection the first time a browser loads those scripts (they'll typically be
-cached after that); the app itself never sends your data anywhere.
+```bash
+pip install -r requirements.txt
+python app.py
+```
 
-Your data (settings, custom foods, log history) is stored in that browser's
-`localStorage` under the `nutritool.*` keys. It's local to one browser on one
-machine — there's no sync between devices or browsers.
+The server prints the URL to open, e.g. `http://localhost:5000` — open that
+in any browser. That's the whole setup: no other build step, no account, no
+internet access required to run it (only the one-time `pip install`, which
+needs internet to download the `Flask` package itself; the app's own runtime
+behavior makes zero external network calls — see the Data storage section).
+
+## Data storage & multi-device setup
+
+Your data (settings, custom foods, log history) lives in a single JSON file
+on disk, read and written by `app.py` through two endpoints the frontend
+calls instead of touching `localStorage`:
+
+- `GET /api/data` — returns the full dataset (`{ config, customFoods, log }`)
+- `POST /api/data` — accepts a full or partial update (any of those three
+  top-level keys you send replaces that key; anything you omit is left alone)
+
+**Where the file lives**: controlled by `config.json`, created next to
+`app.py` the first time you run it if it doesn't already exist, e.g.:
+
+```json
+{ "data_file_path": "./data/nutritool_data.json" }
+```
+
+That default keeps data local to this folder. To sync across devices, edit
+`data_file_path` to point into a cloud-synced folder instead, e.g.:
+
+```json
+{ "data_file_path": "~/Dropbox/nutritool/data.json" }
+```
+
+`~` expands to your home directory. If the target folder doesn't exist yet,
+the server creates it on startup. `config.json` itself is **not** synced or
+committed to this repo (it's gitignored) — you set it once per device.
+
+**Multi-device model**: install and run this server independently on each
+device (laptop, desktop, etc.), and edit each device's `config.json` to point
+at the *same* synced file path. The sync of the file itself is handled
+entirely by your existing Dropbox/Drive/OneDrive/iCloud client — this app has
+no sync logic of its own and makes no network calls to make that happen.
+
+**Known limitation — last write wins**: this tool does not implement file
+locking, conflict detection, or merge logic for simultaneous edits from two
+devices at once. If you log food on your phone and laptop in the same few
+seconds, whichever save reaches disk last overwrites the other. This is a
+deliberate simplicity trade-off for a single-user personal tool — genuinely
+concurrent multi-device edits are an edge case, not a design target. In
+practice: don't run two devices against the same file at the exact same
+moment and you won't notice this.
 
 ## Editing your personalization config
 
@@ -24,10 +77,10 @@ Two ways to set your profile:
 1. **In-app**: open the **Settings** tab, edit age / sex / weight / height /
    activity level, click **Save Settings**. Takes effect immediately.
 2. **In code**: edit the `DEFAULT_CONFIG` object near the top of the
-   `<script type="text/babel">` block in `index.html`. This is only the
-   *first-run default* — once you save via the Settings tab, your saved
-   values in `localStorage` take precedence over this block on every
-   subsequent load.
+   `<script type="text/babel">` block in `static/index.html`. This is only
+   the *first-run default* — once you save via the Settings tab, the saved
+   values in your data file (see [Data storage](#data-storage--multi-device-setup))
+   take precedence over this block on every subsequent load.
 
 Config fields:
 
@@ -101,7 +154,7 @@ derived from window/2).
 | Selenium | 30 | 15 (window/2) | Unsourced estimate — shared default |
 | Choline | 30 | **7 (explicit override, NOT window/2)** | Estimated, user-specified override |
 
-This exact table lives as `LOOKBACK_TABLE` near the top of `index.html`,
+This exact table lives as `LOOKBACK_TABLE` near the top of `static/index.html`,
 with each row's basis annotated in code comments. In the dashboard, each
 lookback nutrient shows a small badge (e.g. `60d / sourced`, `30d /
 estimate`) so you can see at a glance which numbers are grounded in cited
@@ -118,13 +171,14 @@ curves. Treat flags as "worth a look," not a diagnosis.
   Intake (DRI) reports. Calorie target uses the Mifflin-St Jeor equation;
   macro targets (fat/carbs) use AMDR midpoints; saturated fat and added
   sugar use Dietary Guidelines for Americans upper-limit guidance (see
-  `computeTargets()` in `index.html` for the exact formulas and per-nutrient
-  comments).
-- **Seed food list** (~100 foods, `SEED_FOODS` in `index.html`): per-100g
-  values styled after USDA FoodData Central (`fdc.nal.usda.gov`) entries,
-  but hand-entered from general nutrition knowledge rather than fetched live
-  — this app makes no network calls at runtime, so there's no live FDC API
-  integration. Treat seed values as reasonable estimates for personal
+  `computeTargets()` in `static/index.html` for the exact formulas and
+  per-nutrient comments).
+- **Seed food list** (~100 foods, `SEED_FOODS` in `static/index.html`):
+  per-100g values styled after USDA FoodData Central (`fdc.nal.usda.gov`)
+  entries, but hand-entered from general nutrition knowledge rather than
+  fetched live — this app makes no external network calls at runtime, so
+  there's no live FDC API integration. Treat seed values as reasonable
+  estimates for personal
   tracking, not lab-grade precision; spot-check anything nutrient-critical
   against FDC directly. Nutrients the assistant wasn't confident about for a
   given food were left as `null` ("no data") rather than defaulted to `0`
@@ -137,9 +191,9 @@ curves. Treat flags as "worth a look," not a diagnosis.
 
 Add foods via the **Add Food** tab — name plus any subset of the 29
 nutrients per 100g (leave fields blank for unknown values, stored as
-`null`/no-data, not zero). Custom foods are stored separately from the seed
-list in `localStorage` (`nutritool.customFoods`), so they won't be
-overwritten if you later update the seed list in `index.html`.
+`null`/no-data, not zero). Custom foods are stored under `customFoods` in
+your data file, separately from the seed list, so they won't be overwritten
+if you later update `SEED_FOODS` in `static/index.html`.
 
 ## Logging and history
 
@@ -153,11 +207,26 @@ recompute automatically) or delete it. Entries show their logged timestamp.
 
 ## File layout
 
-- `index.html` — the entire app (config, data, decay model, UI)
+- `app.py` — Flask server: serves the frontend and the `/api/data` REST API,
+  handles `config.json` / data-file resolution and JSON read/write
+- `requirements.txt` — just `Flask`
+- `static/index.html` — the entire frontend (nutrient panel, decay model,
+  seed food database, UI) — unchanged from the original except its
+  persistence layer now calls `/api/data` instead of `localStorage`
+- `static/vendor/` — React, ReactDOM, and Babel Standalone, vendored locally
+  so the app never fetches them from a CDN at runtime (see Non-goals)
+- `config.json` — generated on first run, gitignored (machine-specific: it
+  holds the data file path for *this* device)
+- `data/` — default local data folder (gitignored); irrelevant once you've
+  repointed `config.json` at a synced folder
 - `README.md` — this file
 
 ## Non-goals
 
-No external API calls, no accounts, no sync, no server, no attempt at
+No external API/network calls of any kind at runtime (React/ReactDOM/Babel
+are vendored locally rather than loaded from a CDN, specifically so the app
+never needs internet access to run — only `localhost`), no accounts, no
+cloud backend, no built-in sync or conflict resolution (sync is delegated
+entirely to whatever cloud-sync client you already run), no attempt at
 clinical authority. All approximations (decay rates, lookback windows, seed
 food values) are disclosed above and in-app rather than presented as exact.

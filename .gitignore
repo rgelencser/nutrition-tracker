@@ -1,1 +1,7 @@
 desktop.ini
+config.json
+data/
+__pycache__/
+*.pyc
+.venv/
+venv/
